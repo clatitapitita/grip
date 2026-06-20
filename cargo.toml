@@ -1,0 +1,12 @@
+[package]
+name = "grip"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+crossterm = "0.29.0"
+rfd = {version = "0.14", optional = true}
+syntect = "5.3.0"
+
+[features]
+native-dialog = ["dep:rfd"]
