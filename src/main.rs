@@ -201,60 +201,65 @@ fn run(stdout: &mut impl Write) -> std::io::Result<()> {
 
     'editor: loop {
         let (_cols, rows) = terminal::size()?;
+        let rows_usize = rows as usize;
+        let cols_usize = _cols as usize;
 
         let scroll_margin = 5;
 
+        let max_row_offset = lines.len().saturating_sub(rows_usize.saturating_sub(1));
+
         if cursor_y < row_offset + scroll_margin {
             row_offset = cursor_y.saturating_sub(scroll_margin);
-        } else if cursor_y >= row_offset + (rows as usize - 1 - scroll_margin) {
-            row_offset = cursor_y.saturating_sub(rows as usize - 1 - scroll_margin);
+        } else if cursor_y >= row_offset + rows_usize.saturating_sub(1).saturating_sub(scroll_margin) {
+            row_offset = cursor_y.saturating_sub(rows_usize.saturating_sub(1).saturating_sub(scroll_margin));
+        }
+
+        if row_offset > max_row_offset {
+            row_offset = max_row_offset;
         }
 
         let horizontal_margin = 8;
 
         if cursor_x < col_offset + horizontal_margin {
             col_offset = cursor_x.saturating_sub(horizontal_margin);
-        } else if cursor_x >= col_offset + _cols as usize - horizontal_margin {
-            col_offset = cursor_x.saturating_sub(_cols as usize - horizontal_margin);
+        } else if cursor_x >= col_offset + cols_usize.saturating_sub(horizontal_margin) {
+            col_offset = cursor_x.saturating_sub(cols_usize.saturating_sub(horizontal_margin));
         }
 
         // ── Render ───────────────────────────────────────────────────────────
         execute!(stdout, cursor::Hide)?;
 
+        execute!(stdout, terminal::Clear(ClearType::All))?;
+
 
         for (screen_y, line) in lines
             .iter()
             .skip(row_offset)
-            .take((rows - 1) as usize)
+            .take(rows_usize.saturating_sub(1))
             .enumerate() {
-                execute!(
-                    stdout,
-                    cursor::MoveTo(0, screen_y as u16),
-                    terminal::Clear(ClearType::CurrentLine)
-                )?;
-            if screen_y as u16 >= rows - 1 {
-                break;
-            }
-            let full_text: String = line.iter().collect();
+                if screen_y >= rows_usize.saturating_sub(1) {
+                    break;
+                }
 
-            let visible_text: String = full_text
-                .chars()
-                .skip(col_offset)
-                .take(_cols as usize)
-                .collect();
+                let full_text: String = line.iter().collect();
+                let visible_text: String = full_text
+                    .chars()
+                    .skip(col_offset)
+                    .take(cols_usize)
+                    .collect();
 
-            let syntax = if let Some(path) = &file_path {
-                path.extension()
-                    .and_then(|s| s.to_str())
-                    .and_then(|ext| ps.find_syntax_by_extension(ext))
-                    .unwrap_or_else(|| ps.find_syntax_plain_text())
-            } else {
+                let syntax = if let Some(path) = &file_path {
+                    path.extension()
+                        .and_then(|s| s.to_str())
+                        .and_then(|ext| ps.find_syntax_by_extension(ext))
+                        .unwrap_or_else(|| ps.find_syntax_plain_text())
+                } else {
                 ps.find_syntax_plain_text()
             };
 
             let mut h = HighlightLines::new(syntax, theme);
 
-            let ranges = h.highlight_line(&visible_text, &ps).unwrap();
+            let ranges = h.highlight_line(&visible_text, &ps).unwrap_or_default();
 
             execute!(stdout, cursor::MoveTo(0, screen_y as u16))?;
 
@@ -271,10 +276,6 @@ fn run(stdout: &mut impl Write) -> std::io::Result<()> {
                     Print(piece)
                 )?;
             }
-            execute!(stdout, cursor::Show)?;
-
-            stdout.flush();
-
             execute!(stdout, ResetColor)?;
         }
 
@@ -318,12 +319,14 @@ fn run(stdout: &mut impl Write) -> std::io::Result<()> {
             _ => {
                 execute!(stdout,
                     cursor::MoveTo(
-                        (cursor_x - col_offset) as u16,
-                        (cursor_y - row_offset) as u16,
+                        cursor_x.saturating_sub(col_offset) as u16,
+                        cursor_y.saturating_sub(row_offset) as u16,
                     )
-                )?;
+
+                    )?;
             }
         }
+        execute!(stdout, cursor::Show)?;
 
         stdout.flush()?;
 
@@ -397,32 +400,28 @@ fn run(stdout: &mut impl Write) -> std::io::Result<()> {
                         let jump = (rows as usize) / 2;
 
                         cursor_y = (cursor_y + jump).min(lines.len().saturating_sub(1));
-
-                        row_offset = (row_offset + jump)
-                            .min(lines.len().saturating_sub(rows as usize));
                     }
                     KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
                         let jump = (rows as usize) / 2;
 
                         cursor_y = cursor_y.saturating_sub(jump);
-                        row_offset = row_offset.saturating_sub(jump);
                     }
                     KeyCode::PageDown => {
                         let jump = rows as usize - 2;
 
                         cursor_y = (cursor_y + jump).min(lines.len().saturating_sub(1));
 
-                        row_offset = (row_offset + jump
-                            .min(lines.len()).saturating_sub(rows as usize));
                     }
                     KeyCode::PageUp => {
                         let jump = rows as usize - 2;
 
                         cursor_y = cursor_y.saturating_sub(jump);
-                        row_offset = row_offset.saturating_sub(jump);
                     }
                     KeyCode::Char('z') => {
                         row_offset = cursor_y.saturating_sub((rows as usize) / 2);
+                        if row_offset > max_row_offset {
+                            row_offset = max_row_offset;
+                        }
                     }
                     _ => {}
                 },
@@ -590,4 +589,5 @@ fn run(stdout: &mut impl Write) -> std::io::Result<()> {
     }
 
     Ok(())
-}
+
+    }
