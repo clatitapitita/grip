@@ -194,16 +194,7 @@ fn run(stdout: &mut impl Write) -> std::io::Result<()> {
     let mut dirty = false;
     let mut file_path: Option<PathBuf> = None;
 
-    let syntax = if let Some(path) = &file_path {
-        path.extension()
-            .and_then(|s| s.to_str())
-            .and_then(|ext| ps.find_syntax_by_extension(ext))
-            .unwrap_or_else(|| ps.find_syntax_plain_text())
-    } else {
-        ps.find_syntax_plain_text()
-    };
 
-    let mut h = HighlightLines::new(syntax, theme);
     let mut save_prompt_buf = String::new();
     let mut open_prompt_buf = String::new();
     let mut status_msg = String::new();
@@ -211,28 +202,59 @@ fn run(stdout: &mut impl Write) -> std::io::Result<()> {
     'editor: loop {
         let (_cols, rows) = terminal::size()?;
 
-        if cursor_y < row_offset {
-            row_offset = cursor_y;
-        } else if cursor_y >= row_offset + (rows as usize - 1) {
-            row_offset = cursor_y - (rows as usize - 2);
+        let scroll_margin = 5;
+
+        if cursor_y < row_offset + scroll_margin {
+            row_offset = cursor_y.saturating_sub(scroll_margin);
+        } else if cursor_y >= row_offset + (rows as usize - 1 - scroll_margin) {
+            row_offset = cursor_y.saturating_sub(rows as usize - 1 - scroll_margin);
         }
 
-        if cursor_x < col_offset {
-            col_offset = cursor_x;
-        } else if cursor_x >= col_offset + _cols as usize {
-            col_offset = cursor_x - _cols as usize + 1;
+        let horizontal_margin = 8;
+
+        if cursor_x < col_offset + horizontal_margin {
+            col_offset = cursor_x.saturating_sub(horizontal_margin);
+        } else if cursor_x >= col_offset + _cols as usize - horizontal_margin {
+            col_offset = cursor_x.saturating_sub(_cols as usize - horizontal_margin);
         }
 
         // ── Render ───────────────────────────────────────────────────────────
-        execute!(stdout, terminal::Clear(ClearType::All))?;
-        for (screen_y, line) in lines.iter().skip(row_offset).enumerate() {
+        execute!(stdout, cursor::Hide)?;
+
+
+        for (screen_y, line) in lines
+            .iter()
+            .skip(row_offset)
+            .take((rows - 1) as usize)
+            .enumerate() {
+                execute!(
+                    stdout,
+                    cursor::MoveTo(0, screen_y as u16),
+                    terminal::Clear(ClearType::CurrentLine)
+                )?;
             if screen_y as u16 >= rows - 1 {
                 break;
             }
-            let text: String = line.iter().collect();
+            let full_text: String = line.iter().collect();
 
+            let visible_text: String = full_text
+                .chars()
+                .skip(col_offset)
+                .take(_cols as usize)
+                .collect();
 
-            let ranges = h.highlight_line(&text, &ps).unwrap();
+            let syntax = if let Some(path) = &file_path {
+                path.extension()
+                    .and_then(|s| s.to_str())
+                    .and_then(|ext| ps.find_syntax_by_extension(ext))
+                    .unwrap_or_else(|| ps.find_syntax_plain_text())
+            } else {
+                ps.find_syntax_plain_text()
+            };
+
+            let mut h = HighlightLines::new(syntax, theme);
+
+            let ranges = h.highlight_line(&visible_text, &ps).unwrap();
 
             execute!(stdout, cursor::MoveTo(0, screen_y as u16))?;
 
@@ -246,11 +268,17 @@ fn run(stdout: &mut impl Write) -> std::io::Result<()> {
                 execute!(
                     stdout,
                     SetForegroundColor(color),
-                    Print(piece),
-                    ResetColor
+                    Print(piece)
                 )?;
             }
+            execute!(stdout, cursor::Show)?;
+
+            stdout.flush();
+
+            execute!(stdout, ResetColor)?;
         }
+
+
 
         // Status bar
         execute!(stdout, cursor::MoveTo(0, rows - 1))?;
@@ -364,6 +392,37 @@ fn run(stdout: &mut impl Write) -> std::io::Result<()> {
                                 cursor_x = line.len().saturating_sub(1);
                             }
                         }
+                    }
+                    KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        let jump = (rows as usize) / 2;
+
+                        cursor_y = (cursor_y + jump).min(lines.len().saturating_sub(1));
+
+                        row_offset = (row_offset + jump)
+                            .min(lines.len().saturating_sub(rows as usize));
+                    }
+                    KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        let jump = (rows as usize) / 2;
+
+                        cursor_y = cursor_y.saturating_sub(jump);
+                        row_offset = row_offset.saturating_sub(jump);
+                    }
+                    KeyCode::PageDown => {
+                        let jump = rows as usize - 2;
+
+                        cursor_y = (cursor_y + jump).min(lines.len().saturating_sub(1));
+
+                        row_offset = (row_offset + jump
+                            .min(lines.len()).saturating_sub(rows as usize));
+                    }
+                    KeyCode::PageUp => {
+                        let jump = rows as usize - 2;
+
+                        cursor_y = cursor_y.saturating_sub(jump);
+                        row_offset = row_offset.saturating_sub(jump);
+                    }
+                    KeyCode::Char('z') => {
+                        row_offset = cursor_y.saturating_sub((rows as usize) / 2);
                     }
                     _ => {}
                 },
