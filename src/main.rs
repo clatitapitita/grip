@@ -17,7 +17,7 @@ use syntect::{
 use std::io::{stdout, Write};
 use std::path::PathBuf;
 
-
+//test 
 
 #[derive(PartialEq)]
 enum Mode {
